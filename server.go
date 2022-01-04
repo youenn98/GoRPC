@@ -56,7 +56,7 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 		return
 	}
 
-	decodeF := codec.CodeType2FuncMap[opt.CodecType]
+	decodeF := codec.CodeType2NewCodecFuncMap[opt.CodecType]
 	if decodeF == nil{
 		println("rpc server : CodeType not supported",opt.CodecType)
 		return
@@ -66,6 +66,7 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 }
 
 func (server *Server) ServeCodec(c codec.Codec) {
+	sendLock := new(sync.Mutex)
 	wg := new(sync.WaitGroup)
 	for {
 		req, err := server.readRequest(c)
@@ -74,12 +75,12 @@ func (server *Server) ServeCodec(c codec.Codec) {
 				break
 			}
 			req.header.Error = err.Error()
-			server.sendResponse(c, req.header, invalidRequest)
+			server.sendResponse(c, req.header, invalidRequest,sendLock)
 			log.Println("server received invalid request")
 			continue
 		}
 		wg.Add(1)
-		go server.handleRequest(c,req,wg)
+		go server.handleRequest(c,req,wg,sendLock)
 	}
 
 	wg.Wait()
@@ -112,14 +113,16 @@ func (server *Server) readRequest(c codec.Codec) (*request, error) {
 
 }
 
-func (server *Server) handleRequest(c codec.Codec, req *request, wg *sync.WaitGroup) {
+func (server *Server) handleRequest(c codec.Codec, req *request, wg *sync.WaitGroup,sendLock *sync.Mutex) {
 	defer wg.Done()
 	log.Println(req.header,req.argv.Elem())
 	req.replyV = reflect.ValueOf(fmt.Sprintf("GoRPC resp: %d",req.header.Seq))
-	server.sendResponse(c,req.header,req.replyV.Interface())
+	server.sendResponse(c,req.header,req.replyV.Interface(),sendLock)
 }
 
-func (server *Server) sendResponse(c codec.Codec, header *codec.Header, body interface{}) {
+func (server *Server) sendResponse(c codec.Codec, header *codec.Header, body interface{},sendLock *sync.Mutex) {
+	sendLock.Lock()
+	defer sendLock.Unlock()
 	if err := c.Write(header,body); err != nil{
 		log.Println("rec server: write response error",err)
 	}

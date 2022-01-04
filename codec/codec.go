@@ -21,12 +21,14 @@ type CodeType string
 type NewCodecFunc func(io.ReadWriteCloser) Codec
 
 const (
-	GobCodeType CodeType = "application/gob"
+	GobCodeType 	CodeType = "application/gob"
+	JsonCodeType    CodeType = "application/json"
 )
 
-var CodeType2FuncMap map[CodeType]NewCodecFunc
+var CodeType2NewCodecFuncMap map[CodeType]NewCodecFunc
 
 func init(){
-	CodeType2FuncMap = make(map[CodeType]NewCodecFunc)
-	CodeType2FuncMap[GobCodeType] = NewGobCodec
+	CodeType2NewCodecFuncMap = make(map[CodeType]NewCodecFunc)
+	CodeType2NewCodecFuncMap[GobCodeType] = NewGobCodec
+	CodeType2NewCodecFuncMap[JsonCodeType] = NewJsonCodec
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"GoRPC"
 	"GoRPC/codec"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -25,20 +24,36 @@ func main(){
 	go tickServer(addr)
 
 
-	conn, _ := net.Dial("tcp",<-addr)
-	defer conn.Close()
+	//client,_ := GoRPC.Dial("tcp",<-addr)
+	client,_ := GoRPC.Dial("tcp",<-addr,&GoRPC.Option{CodecType: codec.JsonCodeType})
+	defer client.Close()
 
+	//time.Sleep(time.Second)
+
+	var wg sync.WaitGroup
+	for i:=0;i < 1000;i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			args := fmt.Sprintf("GoRPC req %d",i)
+			var reply string
+			if err := client.Call("Foo","Sum",args,&reply);err != nil{
+				log.Fatal("call foo.Sum error:",err)
+			}
+			log.Println("reply:",reply)
+		}(i)
+	}
+	wg.Wait()
+
+
+	/*
 	//Send option to server
 	if err := json.NewEncoder(conn).Encode(GoRPC.DefaultOption);err != nil{
 		log.Fatal("Fail to send Option")
 	}
 
 	cc := codec.NewGobCodec(conn)
-
-	wg := new(sync.WaitGroup)
-
 	for i:=0;i < 100;i++ {
-		wg.Add(1)
 		h := &codec.Header{
 			Service : "Localhost",
 			Method  : "echo",
@@ -51,5 +66,5 @@ func main(){
 		_ = cc.ReadBody(&reply)
 		log.Println("reply:",reply)
 	}
-
+	*/
 }
