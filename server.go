@@ -3,7 +3,7 @@ package GoRPC
 import (
 	"GoRPC/codec"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -15,11 +15,18 @@ type Option struct {
 	CodecType   codec.CodeType
 }
 
-type Server struct{}
+type Server struct{
+	serviceMap sync.Map
+}
 
 type request struct {
 	header      *codec.Header
 	argv, replyV reflect.Value
+}
+
+type serviceMethod struct {
+	svc   *service
+	mType *methodType
 }
 
 var DefaultOption = &Option{
@@ -31,9 +38,7 @@ func NewServer() *Server{
 }
 
 var DefaultServer = NewServer()
-var invalidRequest = struct {
-
-}{}
+var invalidRequest = struct {}{}
 
 func (server *Server)Accept(lis net.Listener) error{
 	for{
@@ -69,7 +74,7 @@ func (server *Server) ServeCodec(c codec.Codec) {
 	sendLock := new(sync.Mutex)
 	wg := new(sync.WaitGroup)
 	for {
-		req, err := server.readRequest(c)
+		req, sm,err := server.readRequest(c)
 		if err != nil {
 			if req == nil {
 				break
@@ -80,7 +85,7 @@ func (server *Server) ServeCodec(c codec.Codec) {
 			continue
 		}
 		wg.Add(1)
-		go server.handleRequest(c,req,wg,sendLock)
+		go server.handleRequest(c,req,sm,wg,sendLock)
 	}
 
 	wg.Wait()
@@ -90,33 +95,52 @@ func (server *Server) ServeCodec(c codec.Codec) {
 	}
 }
 
-func (server *Server) readRequest(c codec.Codec) (*request, error) {
+func (server *Server) readRequest(c codec.Codec) (*request, *serviceMethod,error) {
 	//read request header
 	var h codec.Header
-	if err := c.ReadHeader(&h); err != nil{
+	var err error
+	if err = c.ReadHeader(&h); err != nil{
 		if err != io.EOF && err != io.ErrUnexpectedEOF{
 			log.Println("rpc server: read header error",err)
 		}
-		return nil, err
+		return nil,nil,err
 	}
-
+	svcMethod := &serviceMethod{
+		svc: nil,
+		mType: nil,
+	}
 	req := &request{header: &h}
 	//read request body
-	//Suppose to string, req.argv is a pointer to string
-	req.argv = reflect.New(reflect.TypeOf(""))
-	if err := c.ReadBody(req.argv.Interface()); err != nil{
-		log.Println("rpc server: read body error")
-		return nil,err
+	svcMethod.svc,svcMethod.mType,err = server.findService(h.Service,h.Method)
+	if err != nil {
+		return req,svcMethod,err
 	}
 
-	return req,nil
 
+	req.argv = svcMethod.mType.newArgv()
+	req.replyV = svcMethod.mType.newReplyv()
+
+	//if argv is not a pointer, make it to pointer
+	argvi := req.argv.Interface()
+	if req.argv.Type().Kind() != reflect.Ptr {
+		argvi = req.argv.Addr().Interface()
+	}
+
+	if err = c.ReadBody(argvi); err != nil{
+		log.Println("rpc server: read body error")
+		return req,svcMethod,err
+	}
+	return req,svcMethod,err
 }
 
-func (server *Server) handleRequest(c codec.Codec, req *request, wg *sync.WaitGroup,sendLock *sync.Mutex) {
+func (server *Server) handleRequest(c codec.Codec, req *request, sm *serviceMethod,wg *sync.WaitGroup,sendLock *sync.Mutex) {
 	defer wg.Done()
-	log.Println(req.header,req.argv.Elem())
-	req.replyV = reflect.ValueOf(fmt.Sprintf("GoRPC resp: %d",req.header.Seq))
+	err := sm.svc.call(sm.mType,req.argv,req.replyV)
+	if err != nil {
+		req.header.Error = err.Error()
+		server.sendResponse(c,req.header,invalidRequest,sendLock)
+		return
+	}
 	server.sendResponse(c,req.header,req.replyV.Interface(),sendLock)
 }
 
@@ -126,4 +150,26 @@ func (server *Server) sendResponse(c codec.Codec, header *codec.Header, body int
 	if err := c.Write(header,body); err != nil{
 		log.Println("rec server: write response error",err)
 	}
+}
+
+func (server *Server) Register(rcrv interface{}) error {
+	s:= newService(rcrv)
+	if _,dup := server.serviceMap.LoadOrStore(s.name,s); dup {
+		return errors.New("rpc: service already defined" + s.name)
+	}
+	return nil
+}
+
+func (server *Server) findService(serviceName, methodName string)(svc *service, mType *methodType,err error){
+	svci, ok := server.serviceMap.Load(serviceName)
+	if !ok {
+		err = errors.New("rpc server: can't find service" + serviceName)
+		return
+	}
+	svc = svci.(*service)
+	mType = svc.method[methodName]
+	if mType == nil {
+		err = errors.New("rpc server: can't find method" + methodName)
+	}
+	return
 }

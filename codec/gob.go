@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"bufio"
 	"encoding/gob"
 	"io"
 	"log"
@@ -8,6 +9,7 @@ import (
 
 type GobCodec struct {
 	conn io.ReadWriteCloser
+	buf  *bufio.Writer
 	dec  *gob.Decoder
 	enc  *gob.Encoder
 }
@@ -26,6 +28,7 @@ func (g *GobCodec) ReadBody(body interface{}) error {
 
 func (g *GobCodec) Write(header *Header, body interface{}) (err error) {
 	defer func() {
+		_ = g.buf.Flush()
 		if err != nil {
 			g.Close()
 		}
@@ -42,9 +45,11 @@ func (g *GobCodec) Write(header *Header, body interface{}) (err error) {
 }
 
 func NewGobCodec(conn io.ReadWriteCloser)  Codec{
+	buf := bufio.NewWriter(conn)
 	return  &GobCodec{
-		conn : conn,
-		dec :  gob.NewDecoder(conn),
-		enc :  gob.NewEncoder(conn),
+		conn :  conn,
+		buf	 :  buf,
+		dec  :  gob.NewDecoder(conn),
+		enc  :  gob.NewEncoder(buf),
 	}
 }
